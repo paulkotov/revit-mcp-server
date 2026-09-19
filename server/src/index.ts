@@ -1,12 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerTools } from "./tools/register.js";
+import { registerTools } from "./tools/registerTools.js";
 
 const server = new McpServer({
-  name: "mcp-server-for-revit",
+  name: "revit-mcp-server",
   version: "1.0.0",
 });
-
 
 async function main() {
   await registerTools(server);
