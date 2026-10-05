@@ -2,6 +2,7 @@
     <PropertyGroup>
         <OutputType>Library</OutputType>
         <RootNamespace>RevitConnector</RootNamespace>
+        <LangVersion>latest</LangVersion>
         <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
         <UseWindowsForms>true</UseWindowsForms>
         <UseWPF>true</UseWPF>
@@ -28,8 +29,17 @@
         <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
         <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitVersion).*" />
         <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitVersion).*" />
-        <PackageReference Include="RevitMCPSDK" Version="$(RevitVersion).*" />
         <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
         <PackageReference Include="System.Data.DataSetExtensions" Version="4.5.0" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\RevitCommandDispatcher\RevitCommandDispatcher.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Update="RevitConnector.addin">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
     </ItemGroup>
 </Project>

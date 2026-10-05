@@ -2,7 +2,7 @@
 using System;
 using System.IO;
 
-namespace revit_mcp_plugin.Utils
+namespace RevitConnector.Utils
 {
     public static class PathManager
     {
@@ -59,14 +59,28 @@ namespace revit_mcp_plugin.Utils
             return registryFilePath;
         }
         /// <summary>
-        /// Creates a default command registry file with empty commands array
+        /// Creates a default command registry file.
+        /// Built-in commands (revit.ping, revit.getVersion) are always registered in code;
+        /// this file lists optional plugin DLLs under Commands/.
         /// </summary>
-        /// <param name="filePath">Path where to create the file</param>
         private static void CreateDefaultCommandRegistryFile(string filePath)
         {
             try
             {
-                var defaultRegistry = new { commands = new object[] { } };
+                // Example entry (disabled): drop a DLL next to this file and set enabled=true.
+                var defaultRegistry = new
+                {
+                    commands = new object[]
+                    {
+                        new
+                        {
+                            method = "revit.example",
+                            assemblyPath = "ExamplePlugin.dll",
+                            className = "ExamplePlugin.ExampleCommand",
+                            enabled = false
+                        }
+                    }
+                };
                 string jsonContent = JsonConvert.SerializeObject(defaultRegistry, Formatting.Indented);
 
                 File.WriteAllText(filePath, jsonContent);
