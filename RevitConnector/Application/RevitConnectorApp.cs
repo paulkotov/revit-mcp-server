@@ -8,6 +8,7 @@ using RevitCommandDispatcher.Commands;
 using RevitConnector.Configuration;
 using RevitConnector.Core;
 using RevitConnector.Transport;
+using RevitConnector.UI;
 using RevitConnector.Utils;
 
 namespace RevitConnector.Application
@@ -21,6 +22,7 @@ namespace RevitConnector.Application
         private ExternalEvent _externalEvent;
         private CommandExecutionHandler _handler;
         private WebSocketClient _client;
+        private ConnectionStatusPresenter _statusPresenter;
         private CancellationTokenSource _cts;
 
         public Result OnStartup(UIControlledApplication application)
@@ -49,7 +51,22 @@ namespace RevitConnector.Application
 
                 var dispatcher = new DataExchangeDispatcher(queue, _externalEvent, settings);
                 _client = new WebSocketClient(settings, dispatcher);
+                _statusPresenter = new ConnectionStatusPresenter();
+                _client.StatusChanged += _statusPresenter.Publish;
+                ConnectorSession.Attach(_client);
 
+                try
+                {
+                    ConnectionRibbon.Build(application, _statusPresenter);
+                }
+                catch (Exception ex)
+                {
+                    // The socket loop is still useful without a ribbon; don't fail startup.
+                    Logger.Error("Failed to create the MCP connection ribbon.", ex);
+                }
+
+                // Visible to Reconnect before the thread-pool task is actually scheduled.
+                _client.MarkRunning();
                 _cts = new CancellationTokenSource();
                 var token = _cts.Token;
                 Task.Run(() => _client.RunAsync(token), token);
@@ -70,6 +87,7 @@ namespace RevitConnector.Application
             {
                 _cts?.Cancel();
                 _client?.Dispose();
+                _statusPresenter?.Dispose();
                 _externalEvent?.Dispose();
                 _cts?.Dispose();
                 Logger.Info("RevitConnector stopped.");
