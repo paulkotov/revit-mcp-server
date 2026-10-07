@@ -1,1 +1,17 @@
 node_modules/
+
+# TypeScript compiler output (server/src -> server/build)
+build/
+
+# Local project/room snapshot written by the MCP server
+server/revit-data.db
+server/revit-data.db-wal
+server/revit-data.db-shm
+
+# .NET build output
+bin/
+obj/
+
+# IDE / user files
+.vs/
+*.user

@@ -14,6 +14,7 @@
         "clean": "rimraf build",
         "prebuild": "npm run clean",
         "build": "tsc",
+        "start": "node build/index.js --http",
         "prepublishOnly": "npm run build"
     },
     "files": [
