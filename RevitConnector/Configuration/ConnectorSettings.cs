@@ -20,8 +20,9 @@ namespace RevitConnector.Configuration
         public int HeartbeatIntervalMs { get; set; } = 15000;
 
         /// <summary>
-        /// Max tolerated silence (no inbound traffic) before the watchdog aborts the socket
-        /// to force a reconnect. Keep it a few multiples of <see cref="HeartbeatIntervalMs"/>.
+        /// Kept so existing connectorSettings.json files still load.
+        /// Idle sockets are not aborted: protocol keep-alive already detects a dead peer,
+        /// and treating "no RPC traffic" as failure drops a healthy MCP session.
         /// </summary>
         public int HeartbeatTimeoutMs { get; set; } = 45000;
 

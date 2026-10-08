@@ -1,5 +1,8 @@
 node_modules/
 
+# TypeScript compiler output (server/src -> server/build)
+build/
+
 # .NET build output
 bin/
 obj/
