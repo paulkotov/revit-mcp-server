@@ -32,22 +32,56 @@ class RevitConnectionManager {
   private revitSocket?: WebSocket;
   private readonly pending = new Map<string, PendingRequest>();
 
-  start(port = 8080): void {
-    if (this.wss) return;
+  start(port = 8080): Promise<void> {
+    if (this.wss) return Promise.resolve();
 
-    this.wss = new WebSocketServer({ port });
-    console.error(`Revit WS server listening on ws://127.0.0.1:${port}`);
+    return new Promise((resolve, reject) => {
+      const wss = new WebSocketServer({ port });
+      let settled = false;
 
-    this.wss.on("connection", (socket) => {
-      console.error("Revit add-in connected.");
-      this.revitSocket = socket;
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        wss.close();
+        reject(error);
+      };
 
-      socket.on("message", (data) => this.onMessage(data.toString()));
-      socket.on("close", () => {
-        console.error("Revit add-in disconnected.");
-        if (this.revitSocket === socket) this.revitSocket = undefined;
+      wss.on("error", (err: NodeJS.ErrnoException) => {
+        if (!settled && err.code === "EADDRINUSE") {
+          fail(
+            new Error(
+              `Port ${port} is already in use. Stop the other revit-mcp-server process, then start this one again.`
+            )
+          );
+          return;
+        }
+
+        if (!settled) {
+          fail(err);
+          return;
+        }
+
+        console.error("Revit WS server error:", err.message);
       });
-      socket.on("error", (err) => console.error("Revit WS error:", err.message));
+
+      wss.on("listening", () => {
+        if (settled) return;
+        settled = true;
+        this.wss = wss;
+        wss.on("connection", (socket) => {
+          console.error("Revit add-in connected.");
+          this.revitSocket = socket;
+
+          socket.on("message", (data) => this.onMessage(data.toString()));
+          socket.on("close", () => {
+            console.error("Revit add-in disconnected.");
+            if (this.revitSocket === socket) this.revitSocket = undefined;
+          });
+          socket.on("error", (err) => console.error("Revit WS error:", err.message));
+        });
+        console.error(`Revit WS server listening on ws://127.0.0.1:${port}`);
+        resolve();
+      });
     });
   }
 
