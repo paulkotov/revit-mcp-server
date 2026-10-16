@@ -103,6 +103,7 @@ namespace RevitCommandDispatcher.Commands
         {
             Register(new Builtin.PingCommand());
             Register(new Builtin.GetRevitVersionCommand());
+            Register(new Builtin.GetModelMaterialsCommand());
         }
 
         private static IRevitCommand InstantiatePlugin(CommandRegistryEntry entry, string commandsDir)

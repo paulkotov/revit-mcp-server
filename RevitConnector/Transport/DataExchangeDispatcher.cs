@@ -4,9 +4,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using Autodesk.Revit.UI;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using RevitConnector.Configuration;
 using RevitConnector.Core;
 using RevitConnector.Protocol;
+using RevitConnector.Utils;
 
 namespace RevitConnector.Transport
 {
@@ -44,12 +46,18 @@ namespace RevitConnector.Transport
             }
             catch (JsonException ex)
             {
+                Logger.Warn("Command rejected: invalid JSON. " + ex.Message);
                 return DataExchangeResponse.FromError(null, DataExchangeErrorCodes.ParseError, ex.Message);
             }
 
             if (request == null || string.IsNullOrEmpty(request.Method))
+            {
+                Logger.Warn("Command rejected: missing method.");
                 return DataExchangeResponse.FromError(request?.Id, DataExchangeErrorCodes.InvalidRequest,
                     "Missing 'method' or malformed request.");
+            }
+
+            Logger.Info("Command received: " + Describe(request));
 
             var execution = new CommandExecution(request);
             _queue.Enqueue(execution);
@@ -72,9 +80,21 @@ namespace RevitConnector.Transport
                 // Parent cancellation (shutdown) vs. ExecutionTimeout.
                 ct.ThrowIfCancellationRequested();
 
+                Logger.Warn(
+                    "Command timed out: " + Describe(request) +
+                    " after " + _settings.ExecutionTimeoutMs + " ms.");
                 return DataExchangeResponse.FromError(request.Id, DataExchangeErrorCodes.ExecutionTimeout,
                     "Revit did not process the command in time (it may be busy or a modal dialog is open).");
             }
+        }
+
+        private static string Describe(DataExchangeRequest request)
+        {
+            var id = request.Id == null || request.Id.Type == JTokenType.Null
+                ? "none"
+                : request.Id.ToString(Formatting.None);
+            var kind = request.IsNotification ? " notification" : string.Empty;
+            return request.Method + " id=" + id + kind;
         }
     }
 }
