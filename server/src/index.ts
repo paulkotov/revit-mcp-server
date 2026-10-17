@@ -12,7 +12,9 @@ const REVIT_WS_PORT = Number(process.env.REVIT_WS_PORT ?? 8080);
 
 async function main() {
   // Host the WebSocket server the Revit add-in connects to.
-  connectionManager.start(REVIT_WS_PORT);
+  // Wait until the port is actually bound. `ws` reports EADDRINUSE asynchronously,
+  // and logging success before that event hides a second process that never listened.
+  await connectionManager.start(REVIT_WS_PORT);
 
   await registerTools(server);
   const transport = new StdioServerTransport();

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Autodesk.Revit.UI;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using RevitCommandDispatcher;
 using RevitCommandDispatcher.Exceptions;
@@ -29,15 +31,25 @@ namespace RevitConnector.Core
             // Drain the whole queue: several Raise() calls may coalesce into one Execute().
             while (_queue.TryDequeue(out var exec))
             {
+                var label = Describe(exec.Request);
+                Logger.Info("Command executing: " + label);
+                var watch = Stopwatch.StartNew();
+
                 DataExchangeResponse response;
                 try
                 {
                     var result = _executor.Execute(app, exec.Request.Method, exec.Request.Params);
                     response = DataExchangeResponse.FromResult(exec.Request.Id, result);
+                    Logger.Info(
+                        "Command completed: " + label +
+                        " in " + watch.ElapsedMilliseconds + " ms. " +
+                        DescribeResult(result));
                 }
                 catch (Exception ex)
                 {
-                    Logger.Error($"Command '{exec.Request.Method}' failed.", ex);
+                    Logger.Error(
+                        "Command failed: " + label + " in " + watch.ElapsedMilliseconds + " ms.",
+                        ex);
                     response = MapError(exec.Request.Id, ex);
                 }
 
@@ -47,6 +59,36 @@ namespace RevitConnector.Core
         }
 
         public string GetName() => "RevitConnector.CommandExecutionHandler";
+
+        private static string Describe(DataExchangeRequest request)
+        {
+            var id = request.Id == null || request.Id.Type == JTokenType.Null
+                ? "none"
+                : request.Id.ToString(Formatting.None);
+            return request.Method + " id=" + id;
+        }
+
+        private static string DescribeResult(object result)
+        {
+            if (result == null)
+                return "result=null";
+
+            string json;
+            try
+            {
+                json = JsonConvert.SerializeObject(result);
+            }
+            catch (Exception ex)
+            {
+                return "result=(" + result.GetType().Name + ", serialize failed: " + ex.Message + ")";
+            }
+
+            const int limit = 4000;
+            if (json.Length <= limit)
+                return "result=" + json;
+
+            return "result=" + json.Substring(0, limit) + "... (" + json.Length + " chars)";
+        }
 
         private static DataExchangeResponse MapError(JToken id, Exception ex)
         {

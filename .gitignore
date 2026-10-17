@@ -10,3 +10,4 @@ obj/
 # IDE / user files
 .vs/
 *.user
+.cursor/mcp.json
