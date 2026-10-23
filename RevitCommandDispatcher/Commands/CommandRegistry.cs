@@ -104,6 +104,7 @@ namespace RevitCommandDispatcher.Commands
             Register(new Builtin.PingCommand());
             Register(new Builtin.GetRevitVersionCommand());
             Register(new Builtin.GetModelMaterialsCommand());
+            Register(new Builtin.GetMaterialTakeoffCommand());
         }
 
         private static IRevitCommand InstantiatePlugin(CommandRegistryEntry entry, string commandsDir)

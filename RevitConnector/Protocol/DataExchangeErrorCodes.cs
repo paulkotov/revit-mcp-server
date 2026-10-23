@@ -14,5 +14,6 @@ namespace RevitConnector.Protocol
         public const int RevitApiError = -32000;
         public const int NoActiveDocument = -32001;
         public const int ExecutionTimeout = -32002;
+        public const int NotListening = -32003;
     }
 }

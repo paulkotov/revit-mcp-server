@@ -31,12 +31,16 @@ namespace RevitConnector.UI
             _reconnectingSmall = DrawStatus(Color.FromRgb(239, 108, 0), 16);
             _offlineLarge = DrawStatus(Color.FromRgb(198, 40, 40), 32);
             _offlineSmall = DrawStatus(Color.FromRgb(198, 40, 40), 16);
-            ReconnectLarge = DrawReconnect(32);
-            ReconnectSmall = DrawReconnect(16);
+            ConnectLarge = DrawPlug(32, joined: true);
+            ConnectSmall = DrawPlug(16, joined: true);
+            DisconnectLarge = DrawPlug(32, joined: false);
+            DisconnectSmall = DrawPlug(16, joined: false);
         }
 
-        public ImageSource ReconnectLarge { get; }
-        public ImageSource ReconnectSmall { get; }
+        public ImageSource ConnectLarge { get; }
+        public ImageSource ConnectSmall { get; }
+        public ImageSource DisconnectLarge { get; }
+        public ImageSource DisconnectSmall { get; }
 
         public static ConnectionIcons Create() => new ConnectionIcons();
 
@@ -77,69 +81,74 @@ namespace RevitConnector.UI
             return Rasterize(visual, size);
         }
 
-        private static ImageSource DrawReconnect(int size)
+        /// <summary>
+        /// Side view of a plug and a wall socket. Joined pins sit in the holes;
+        /// the disconnect icon leaves a gap and turns the socket rim red.
+        /// </summary>
+        private static ImageSource DrawPlug(int size, bool joined)
         {
             var visual = new DrawingVisual();
             using (var dc = visual.RenderOpen())
             {
-                var brush = FrozenBrush(Color.FromRgb(21, 101, 192));
-                var pen = new Pen(brush, Math.Max(1.6, size / 9.0))
+                var plugBrush = FrozenBrush(Color.FromRgb(21, 101, 192));
+                var rimBrush = FrozenBrush(joined
+                    ? Color.FromRgb(46, 125, 50)
+                    : Color.FromRgb(198, 40, 40));
+                var plateBrush = FrozenBrush(Color.FromRgb(236, 239, 241));
+                var holeBrush = FrozenBrush(Color.FromRgb(55, 71, 79));
+                var prongBrush = FrozenBrush(Color.FromRgb(120, 144, 156));
+
+                var socket = new Rect(
+                    joined ? size * 0.48 : size * 0.58,
+                    size * 0.12,
+                    joined ? size * 0.44 : size * 0.36,
+                    size * 0.76);
+                var rim = new Pen(rimBrush, Math.Max(1.6, size * 0.08));
+                rim.Freeze();
+                dc.DrawRoundedRectangle(plateBrush, rim, socket, size * 0.10, size * 0.10);
+
+                var holeRadius = Math.Max(1.2, size * 0.065);
+                var holeX = socket.X + socket.Width * 0.58;
+                var topHole = new Point(holeX, socket.Y + socket.Height * 0.34);
+                var bottomHole = new Point(holeX, socket.Y + socket.Height * 0.66);
+                dc.DrawEllipse(holeBrush, null, topHole, holeRadius, holeRadius);
+                dc.DrawEllipse(holeBrush, null, bottomHole, holeRadius, holeRadius);
+
+                var plug = new Rect(
+                    joined ? size * 0.08 : size * 0.02,
+                    size * 0.26,
+                    joined ? size * 0.28 : size * 0.26,
+                    size * 0.48);
+                dc.DrawRoundedRectangle(plugBrush, null, plug, size * 0.08, size * 0.08);
+
+                var cord = new Pen(plugBrush, Math.Max(1.6, size * 0.09))
                 {
                     StartLineCap = PenLineCap.Round,
                     EndLineCap = PenLineCap.Round
                 };
-                pen.Freeze();
+                cord.Freeze();
+                var midY = size / 2.0;
+                dc.DrawLine(
+                    cord,
+                    new Point(Math.Max(0.5, plug.X - size * 0.04), midY),
+                    new Point(plug.X + size * 0.10, midY));
 
-                var cx = size / 2.0;
-                var cy = size / 2.0;
-                var radius = size * 0.28;
-                var start = PointOnCircle(cx, cy, radius, 40);
-                var end = PointOnCircle(cx, cy, radius, 300);
-
-                var arc = new StreamGeometry();
-                using (var ctx = arc.Open())
+                var prong = new Pen(prongBrush, Math.Max(1.5, size * 0.07))
                 {
-                    ctx.BeginFigure(start, isFilled: false, isClosed: false);
-                    ctx.ArcTo(
-                        end,
-                        new Size(radius, radius),
-                        rotationAngle: 0,
-                        isLargeArc: true,
-                        SweepDirection.Clockwise,
-                        isStroked: true,
-                        isSmoothJoin: true);
-                }
-                arc.Freeze();
-                dc.DrawGeometry(null, pen, arc);
+                    StartLineCap = PenLineCap.Round,
+                    EndLineCap = PenLineCap.Round
+                };
+                prong.Freeze();
+                var prongStart = plug.Right - size * 0.02;
+                var prongEnd = joined ? holeX : socket.X - size * 0.08;
+                if (prongEnd < prongStart + size * 0.06)
+                    prongEnd = prongStart + size * 0.06;
 
-                var tip = end;
-                var tangent = (300.0 * Math.PI / 180.0) + (Math.PI / 2.0);
-                var head = size * 0.18;
-                var left = new Point(
-                    tip.X - head * Math.Cos(tangent - 0.55),
-                    tip.Y - head * Math.Sin(tangent - 0.55));
-                var right = new Point(
-                    tip.X - head * Math.Cos(tangent + 0.55),
-                    tip.Y - head * Math.Sin(tangent + 0.55));
-
-                var arrow = new StreamGeometry();
-                using (var ctx = arrow.Open())
-                {
-                    ctx.BeginFigure(left, isFilled: true, isClosed: true);
-                    ctx.LineTo(tip, isStroked: false, isSmoothJoin: false);
-                    ctx.LineTo(right, isStroked: false, isSmoothJoin: false);
-                }
-                arrow.Freeze();
-                dc.DrawGeometry(brush, null, arrow);
+                dc.DrawLine(prong, new Point(prongStart, topHole.Y), new Point(prongEnd, topHole.Y));
+                dc.DrawLine(prong, new Point(prongStart, bottomHole.Y), new Point(prongEnd, bottomHole.Y));
             }
 
             return Rasterize(visual, size);
-        }
-
-        private static Point PointOnCircle(double cx, double cy, double radius, double degrees)
-        {
-            var radians = degrees * Math.PI / 180.0;
-            return new Point(cx + radius * Math.Cos(radians), cy + radius * Math.Sin(radians));
         }
 
         private static SolidColorBrush FrozenBrush(Color color)

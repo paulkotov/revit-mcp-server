@@ -3,6 +3,14 @@ node_modules/
 # TypeScript compiler output (server/src -> server/build)
 build/
 
+# Local project/room snapshot written by the MCP server
+server/revit-data.db
+server/revit-data.db-wal
+server/revit-data.db-shm
+
+# CSV files written by get-model-materials
+server/exports/
+
 # .NET build output
 bin/
 obj/

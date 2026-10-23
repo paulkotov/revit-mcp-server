@@ -21,7 +21,8 @@ namespace RevitConnector.Transport
             string detail,
             DateTime? connectedAtUtc,
             int? nextRetryMs,
-            int attempt)
+            int attempt,
+            bool listening)
         {
             State = state;
             ServerUri = serverUri ?? string.Empty;
@@ -29,6 +30,7 @@ namespace RevitConnector.Transport
             ConnectedAtUtc = connectedAtUtc;
             NextRetryMs = nextRetryMs;
             Attempt = attempt;
+            Listening = listening;
         }
 
         public ConnectionState State { get; }
@@ -37,5 +39,8 @@ namespace RevitConnector.Transport
         public DateTime? ConnectedAtUtc { get; }
         public int? NextRetryMs { get; }
         public int Attempt { get; }
+
+        /// <summary>True while incoming MCP calls are executed in Revit.</summary>
+        public bool Listening { get; }
     }
 }
