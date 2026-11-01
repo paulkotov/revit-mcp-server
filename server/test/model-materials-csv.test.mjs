@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { toModelMaterialsCsv, writeModelMaterialsCsv } from "../build/tools/get_model_materials.js";
+import { toModelMaterialsCsv, writeModelMaterialsCsv } from "../build/tools/read/get_model_materials.js";
 
 test("material quantities become one CSV table", () => {
   const csv = toModelMaterialsCsv({

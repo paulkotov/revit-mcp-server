@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { withRevitConnection } from "../utils/ConnectionManager.js";
+import { withRevitConnection } from "../../utils/ConnectionManager.js";
 
 interface ModelMaterial {
   name: string;
@@ -119,7 +119,7 @@ function csvCell(value: string): string {
   return value;
 }
 
-const EXPORTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../exports");
+const EXPORTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../exports");
 
 export function writeModelMaterialsCsv(
   materials: ModelMaterials,

@@ -11,3 +11,5 @@ obj/
 .vs/
 *.user
 .cursor/mcp.json
+/reference
+/server/exports
