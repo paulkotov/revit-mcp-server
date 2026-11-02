@@ -1,52 +1,33 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import path from "path";
-import fs from "fs";
-import { fileURLToPath } from "url";
-// import { z } from "zod";
+import { registerTools as registerActionsTools } from "./actions/index.js";
+import { registerTools as registerBatchTools } from "./batch/index.js";
+import { registerTools as registerCadMepTools } from "./cad-mep/index.js";
+import { registerTools as registerCodeTools } from "./code/index.js";
+import { registerTools as registerCoreTools } from "./core/index.js";
+import { registerTools as registerDocumentsTools } from "./documents/index.js";
+import { registerTools as registerExportTools } from "./export/index.js";
+import { registerTools as registerFamilyTools } from "./family/index.js";
+import { registerTools as registerLinksTools } from "./links/index.js";
+import { registerTools as registerReadTools } from "./read/index.js";
+import { registerTools as registerViewsSheetsTools } from "./views-sheets/index.js";
 
-const EXCLUDED_FILES = ["index.ts", "index.js", "registerTools.ts", "registerTools.js"];
+const toolGroups = [
+  ["core", registerCoreTools],
+  ["read", registerReadTools],
+  ["actions", registerActionsTools],
+  ["documents", registerDocumentsTools],
+  ["views-sheets", registerViewsSheetsTools],
+  ["family", registerFamilyTools],
+  ["links", registerLinksTools],
+  ["cad-mep", registerCadMepTools],
+  ["export", registerExportTools],
+  ["batch", registerBatchTools],
+  ["code", registerCodeTools],
+] as const;
 
-export const registerTools = async (server: McpServer) => {
-  // server.registerTool(
-  //   "get-revit-version",
-  //   {
-  //     description: "Get the version of Revit",
-  //     inputSchema: {
-  //       version: z.string().optional(),
-  //     },
-  //   },
-  //   async () => ({
-  //     content: [{ type: "text", text: "unknown" }],
-  //   })
-  // );
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-
-  const files = fs.readdirSync(__dirname);
-  const toolFiles = files.filter(
-    (file) =>
-      (file.endsWith(".ts") || file.endsWith(".js")) &&
-      !EXCLUDED_FILES.includes(file)
-  );
-
-  for (const file of toolFiles) {
-    try {
-      const importPath = `./${file.replace(/\.(ts|js)$/, ".js")}`;
-
-      const module = await import(importPath);
-
-      const registerFunctionName = Object.keys(module).find(
-        (key) => key.startsWith("register") && typeof module[key] === "function"
-      );
-
-      if (registerFunctionName) {
-        module[registerFunctionName](server);
-        console.error(`Tool registered: ${file}`);
-      } else {
-        console.warn(`Warning: No register function found in file ${file}`);
-      }
-    } catch (error) {
-      console.error(`Error registering tool ${file}:`, error);
-    }
+export function registerTools(server: McpServer): void {
+  for (const [name, register] of toolGroups) {
+    register(server);
+    console.error(`Tool group registered: ${name}`);
   }
-};
+}
