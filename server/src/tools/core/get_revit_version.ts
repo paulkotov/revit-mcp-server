@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { withRevitConnection } from "../utils/ConnectionManager.js";
+import { withRevitConnection } from "../../utils/ConnectionManager.js";
 
 interface RevitVersion {
   versionName: string;
