@@ -32,6 +32,6 @@ export function registerGetRevitVersionTool(server: McpServer) {
           ],
         };
       }
-    }
+    },
   );
 }

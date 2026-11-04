@@ -41,7 +41,7 @@ export function registerGetModelMaterialsTool(server: McpServer) {
         "The tool sums materials of placed model elements and groups them by level.",
         "View-specific elements are skipped. Paint is included as area.",
         "Rebar is reported by bar length, and by volume when Revit provides it, so it is not lost inside the host concrete.",
-        "Elements without a level are grouped as \"(no level)\". Near-zero quantities are omitted.",
+        'Elements without a level are grouped as "(no level)". Near-zero quantities are omitted.',
         "The tool already converts the Revit result to CSV and writes that file to disk. Do not convert it again and do not write another copy.",
         "Present the CSV as one markdown table, keeping the row order and the numbers as given.",
         "In the same reply, tell the user they can download the CSV and include the file path from the tool result.",
@@ -74,7 +74,7 @@ export function registerGetModelMaterialsTool(server: McpServer) {
           },
         ],
       };
-    }
+    },
   );
 }
 
@@ -123,7 +123,7 @@ const EXPORTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 
 export function writeModelMaterialsCsv(
   materials: ModelMaterials,
-  directory = EXPORTS_DIR
+  directory = EXPORTS_DIR,
 ): { csv: string; filePath: string; fileName: string; fileUri: string } {
   const csv = toModelMaterialsCsv(materials);
   const fileName = `model-materials-${fileStamp()}.csv`;
