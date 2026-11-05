@@ -17,7 +17,8 @@ namespace RevitConnector.UI
         private ConnectionSnapshot _pending;
         private int _disposed;
         private PushButton _statusButton;
-        private PushButton _reconnectButton;
+        private PushButton _connectButton;
+        private PushButton _disconnectButton;
         private ConnectionIcons _icons;
         private string _appliedKey;
 
@@ -27,10 +28,15 @@ namespace RevitConnector.UI
             _externalEvent = ExternalEvent.Create(this);
         }
 
-        public void Bind(PushButton statusButton, PushButton reconnectButton, ConnectionIcons icons)
+        public void Bind(
+            PushButton statusButton,
+            PushButton connectButton,
+            PushButton disconnectButton,
+            ConnectionIcons icons)
         {
             _statusButton = statusButton ?? throw new ArgumentNullException(nameof(statusButton));
-            _reconnectButton = reconnectButton ?? throw new ArgumentNullException(nameof(reconnectButton));
+            _connectButton = connectButton ?? throw new ArgumentNullException(nameof(connectButton));
+            _disconnectButton = disconnectButton ?? throw new ArgumentNullException(nameof(disconnectButton));
             _icons = icons;
             Apply(Interlocked.CompareExchange(ref _pending, null, null) ?? ConnectorSession.Snapshot);
         }
@@ -79,15 +85,19 @@ namespace RevitConnector.UI
 
         private void Apply(ConnectionSnapshot snapshot)
         {
-            if (snapshot == null || _statusButton == null || _reconnectButton == null)
+            if (snapshot == null || _statusButton == null || _connectButton == null || _disconnectButton == null)
                 return;
 
-            var key = snapshot.State + "|" + snapshot.Detail + "|" + snapshot.NextRetryMs + "|" + snapshot.Attempt;
+            var client = ConnectorSession.Client;
+            _connectButton.Enabled = client != null && client.CanListen;
+            _disconnectButton.Enabled = client != null && client.CanStopListening;
+
+            var key = snapshot.State + "|" + snapshot.Listening + "|" + snapshot.Detail + "|" + snapshot.NextRetryMs + "|" + snapshot.Attempt;
             if (key == _appliedKey)
                 return;
             _appliedKey = key;
 
-            _statusButton.ItemText = ConnectionStatusText.Label(snapshot.State);
+            _statusButton.ItemText = ConnectionStatusText.Label(snapshot);
             _statusButton.ToolTip = ConnectionStatusText.Describe(snapshot);
 
             if (_icons != null)
@@ -95,9 +105,6 @@ namespace RevitConnector.UI
                 _statusButton.LargeImage = _icons.Large(snapshot.State);
                 _statusButton.Image = _icons.Small(snapshot.State);
             }
-
-            _reconnectButton.ToolTip = ConnectionStatusText.ReconnectTooltip(snapshot.State);
-            _reconnectButton.Enabled = snapshot.State != ConnectionState.Disconnected;
         }
     }
 }

@@ -17,7 +17,7 @@ namespace RevitConnector.Commands
             {
                 MainInstruction = snapshot == null
                     ? "No status yet."
-                    : ConnectionStatusText.Headline(snapshot.State),
+                    : ConnectionStatusText.Headline(snapshot),
                 MainContent = ConnectionStatusText.Describe(snapshot),
                 CommonButtons = TaskDialogCommonButtons.Close
             };
