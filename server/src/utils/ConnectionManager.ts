@@ -33,14 +33,18 @@ class RevitConnectionManager {
   private readonly pending = new Map<string, PendingRequest>();
 
   start(port = 8080): Promise<void> {
-    if (this.wss) return Promise.resolve();
+    if (this.wss) {
+      return Promise.resolve();
+    }
 
     return new Promise((resolve, reject) => {
       const wss = new WebSocketServer({ port });
       let settled = false;
 
       const fail = (error: Error) => {
-        if (settled) return;
+        if (settled) {
+          return;
+        }
         settled = true;
         wss.close();
         reject(error);
@@ -50,8 +54,8 @@ class RevitConnectionManager {
         if (!settled && err.code === "EADDRINUSE") {
           fail(
             new Error(
-              `Port ${port} is already in use. Stop the other revit-mcp-server process, then start this one again.`
-            )
+              `Port ${port} is already in use. Stop the other revit-mcp-server process, then start this one again.`,
+            ),
           );
           return;
         }
@@ -65,7 +69,9 @@ class RevitConnectionManager {
       });
 
       wss.on("listening", () => {
-        if (settled) return;
+        if (settled) {
+          return;
+        }
         settled = true;
         this.wss = wss;
         wss.on("connection", (socket) => {
@@ -75,7 +81,9 @@ class RevitConnectionManager {
           socket.on("message", (data) => this.onMessage(data.toString()));
           socket.on("close", () => {
             console.error("Revit add-in disconnected.");
-            if (this.revitSocket === socket) this.revitSocket = undefined;
+            if (this.revitSocket === socket) {
+              this.revitSocket = undefined;
+            }
           });
           socket.on("error", (err) => console.error("Revit WS error:", err.message));
         });
@@ -112,9 +120,7 @@ class RevitConnectionManager {
         timer,
       });
 
-      this.revitSocket.send(
-        JSON.stringify({ jsonrpc: "2.0", id, method, params })
-      );
+      this.revitSocket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
     });
   }
 
@@ -128,18 +134,21 @@ class RevitConnectionManager {
     }
 
     const id = response.id;
-    if (id === null || id === undefined) return; // notification, nothing to correlate
+    // notification, nothing to correlate
+    if (id === null || id === undefined) {
+      return;
+    }
 
     const pending = this.pending.get(String(id));
-    if (!pending) return;
+    if (!pending) {
+      return;
+    }
 
     this.pending.delete(String(id));
     clearTimeout(pending.timer);
 
     if (response.error) {
-      pending.reject(
-        new Error(`Revit error ${response.error.code}: ${response.error.message}`)
-      );
+      pending.reject(new Error(`Revit error ${response.error.code}: ${response.error.message}`));
     } else {
       pending.resolve(response.result);
     }
@@ -153,7 +162,7 @@ export const connectionManager = new RevitConnectionManager();
  */
 export async function withRevitConnection<T = unknown>(
   method: string,
-  params?: unknown
+  params?: unknown,
 ): Promise<T> {
   return connectionManager.send<T>(method, params);
 }
