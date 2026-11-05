@@ -12,85 +12,154 @@ using RevitConnector.Utils;
 namespace RevitConnector.Transport
 {
     /// <summary>
-    /// Background WebSocket client: connect-with-backoff, receive loop, serialized sends.
+    /// Background WebSocket client. <see cref="Start"/> opens the socket and retries on its own.
+    /// Incoming calls are not executed in Revit until <see cref="RequestListen"/>; 
+    /// <see cref="RequestStopListening"/> ignores them again without dropping the socket.
     /// Revit is the WS client; the Node MCP server hosts the WS server.
-    ///
-    /// A manual reconnect increments <see cref="_generation"/> and cancels the current attempt.
-    /// The loop retries immediately and stays alive. It stops only when the host token is cancelled.
     /// </summary>
     public sealed class WebSocketClient : IDisposable
     {
         private const int MinBackoffMs = 200;
-        private const int ReconnectDebounceMs = 300;
 
         private readonly ConnectorSettings _settings;
         private readonly DataExchangeDispatcher _dispatcher;
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
 
         private ClientWebSocket _socket;
-        private CancellationTokenSource _attemptCts;
+        private CancellationTokenSource _lifetimeCts;
         private ConnectionSnapshot _snapshot;
-        private int _generation;
         private int _running;
         private int _loopEntered;
         private int _stopping;
-        private int _lastReconnectTick = int.MinValue;
+        private int _listening;
 
         public WebSocketClient(ConnectorSettings settings, DataExchangeDispatcher dispatcher)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
             _snapshot = new ConnectionSnapshot(
-                ConnectionState.Connecting,
+                ConnectionState.Disconnected,
                 _settings.ServerUri,
-                "Starting.",
+                "Not connected.",
                 connectedAtUtc: null,
                 nextRetryMs: null,
-                attempt: 0);
+                attempt: 0,
+                listening: false);
         }
 
         public ConnectionSnapshot CurrentSnapshot =>
             Interlocked.CompareExchange(ref _snapshot, null, null);
 
-        /// <summary>True after <see cref="MarkRunning"/> until the loop exits.</summary>
-        public bool IsRunning => Volatile.Read(ref _running) == 1;
+        /// <summary>True while MCP calls are executed in Revit.</summary>
+        public bool IsListening => Volatile.Read(ref _listening) == 1;
+
+        /// <summary>True when Connect can turn listening on.</summary>
+        public bool CanListen => Volatile.Read(ref _stopping) == 0 && !IsListening;
+
+        /// <summary>True when Disconnect can turn listening off.</summary>
+        public bool CanStopListening => Volatile.Read(ref _stopping) == 0 && IsListening;
 
         public event Action<ConnectionSnapshot> StatusChanged;
 
         /// <summary>
-        /// Call on the Revit UI thread immediately before starting <see cref="RunAsync"/>
-        /// so Reconnect is meaningful before the thread-pool task is scheduled.
+        /// Opens the socket and keeps retrying until disposal.
+        /// Does not execute incoming commands; that starts at <see cref="RequestListen"/>.
         /// </summary>
-        public void MarkRunning()
+        public bool Start()
         {
-            Interlocked.CompareExchange(ref _running, 1, 0);
+            if (Volatile.Read(ref _stopping) == 1)
+                return false;
+
+            if (Volatile.Read(ref _loopEntered) != 0)
+            {
+                return Volatile.Read(ref _running) == 1
+                    && Interlocked.CompareExchange(ref _lifetimeCts, null, null) != null;
+            }
+
+            var cts = new CancellationTokenSource();
+            if (Interlocked.CompareExchange(ref _lifetimeCts, cts, null) != null)
+            {
+                cts.Dispose();
+                return Volatile.Read(ref _stopping) == 0;
+            }
+
+            if (Volatile.Read(ref _loopEntered) != 0 || Volatile.Read(ref _stopping) == 1)
+            {
+                ReleaseLifetime(cts);
+                return false;
+            }
+
+            Logger.Info("Connection loop starting.");
+            Task.Run(() => RunAsync(cts));
+            return true;
         }
 
-        public async Task RunAsync(CancellationToken ct)
+        /// <summary>
+        /// Executes subsequent MCP calls in Revit. The socket loop is started if it is not already up.
+        /// </summary>
+        public bool RequestListen()
+        {
+            if (!Start())
+                return false;
+
+            if (Interlocked.Exchange(ref _listening, 1) == 1)
+                return true;
+
+            Logger.Info("Revit is listening for MCP commands.");
+            Republish();
+            return true;
+        }
+
+        /// <summary>
+        /// Ignores incoming MCP calls. Leaves the socket and its retry loop running.
+        /// </summary>
+        public bool RequestStopListening()
+        {
+            if (Volatile.Read(ref _stopping) == 1)
+                return false;
+
+            if (Interlocked.Exchange(ref _listening, 0) == 0)
+                return true;
+
+            Logger.Info("Revit stopped listening for MCP commands.");
+            Republish();
+            return true;
+        }
+
+        private async Task RunAsync(CancellationTokenSource lifetime)
         {
             if (Interlocked.CompareExchange(ref _loopEntered, 1, 0) != 0)
-                throw new InvalidOperationException("The connection loop is already running.");
+            {
+                ReleaseLifetime(lifetime);
+                return;
+            }
 
             Interlocked.Exchange(ref _running, 1);
-            var backoff = NormalizeBackoff(_settings.InitialBackoffMs);
+
+            CancellationToken ct;
             var attempt = 0;
+            try
+            {
+                ct = lifetime.Token;
+            }
+            catch (ObjectDisposedException)
+            {
+                Finish(lifetime, attempt);
+                return;
+            }
+
+            var backoff = NormalizeBackoff(_settings.InitialBackoffMs);
 
             try
             {
                 while (!ct.IsCancellationRequested && Volatile.Read(ref _stopping) == 0)
                 {
                     attempt++;
-                    var generation = Volatile.Read(ref _generation);
                     ClientWebSocket socket = null;
-                    CancellationTokenSource attemptCts = null;
                     string dropReason = null;
-                    var forced = false;
 
                     try
                     {
-                        attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                        Interlocked.Exchange(ref _attemptCts, attemptCts);
-
                         socket = new ClientWebSocket();
                         // Protocol pings. A dead TCP shows up as an exception in the receive loop.
                         // Idle RPC silence must NOT drop the socket: a healthy session often has no traffic.
@@ -101,42 +170,29 @@ namespace RevitConnector.Transport
 
                         Publish(ConnectionState.Connecting, "Opening WebSocket.", null, null, attempt);
                         Logger.Info($"Connecting to {_settings.Uri} (attempt {attempt}) ...");
-                        await socket.ConnectAsync(_settings.Uri, attemptCts.Token).ConfigureAwait(false);
+                        await socket.ConnectAsync(_settings.Uri, ct).ConfigureAwait(false);
 
-                        if (ct.IsCancellationRequested)
+                        if (ct.IsCancellationRequested || Volatile.Read(ref _stopping) == 1)
                             break;
 
-                        if (ReconnectRequested(generation))
-                        {
-                            forced = true;
-                        }
-                        else
-                        {
-                            var connectedAt = DateTime.UtcNow;
-                            backoff = NormalizeBackoff(_settings.InitialBackoffMs);
-                            Publish(
-                                ConnectionState.Connected,
-                                "Linked to the MCP server.",
-                                connectedAt,
-                                null,
-                                attempt);
-                            Logger.Info("Connected to MCP server.");
+                        var connectedAt = DateTime.UtcNow;
+                        backoff = NormalizeBackoff(_settings.InitialBackoffMs);
+                        Publish(
+                            ConnectionState.Connected,
+                            "Linked to the MCP server.",
+                            connectedAt,
+                            null,
+                            attempt);
+                        Logger.Info("Connected to MCP server.");
 
-                            // Read with the attempt token so Reconnect unblocks the loop.
-                            // Dispatch with the host token so an in-flight command can still
-                            // reply on the next socket instead of being cancelled mid-transaction.
-                            await ReceiveLoopAsync(socket, attemptCts.Token, ct).ConfigureAwait(false);
+                        await ReceiveLoopAsync(socket, ct).ConfigureAwait(false);
 
-                            if (ct.IsCancellationRequested)
-                                break;
+                        if (ct.IsCancellationRequested || Volatile.Read(ref _stopping) == 1)
+                            break;
 
-                            if (ReconnectRequested(generation))
-                                forced = true;
-                            else
-                                dropReason = "Server closed the connection.";
-                        }
+                        dropReason = "Server closed the connection.";
                     }
-                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested || Volatile.Read(ref _stopping) == 1)
                     {
                         break;
                     }
@@ -145,35 +201,22 @@ namespace RevitConnector.Transport
                         if (ct.IsCancellationRequested || Volatile.Read(ref _stopping) == 1)
                             break;
 
-                        if (ReconnectRequested(generation))
-                            forced = true;
-                        else
-                            dropReason = string.IsNullOrWhiteSpace(ex.Message)
-                                ? "Connection lost."
-                                : ex.Message;
+                        dropReason = string.IsNullOrWhiteSpace(ex.Message)
+                            ? "Connection lost."
+                            : ex.Message;
                     }
                     finally
                     {
-                        if (attemptCts != null)
-                            Interlocked.CompareExchange(ref _attemptCts, null, attemptCts);
-
-                        try { attemptCts?.Dispose(); }
-                        catch (ObjectDisposedException) { /* already disposed */ }
-
                         ReleaseSocket(socket);
                     }
 
-                    if (forced)
-                    {
-                        Logger.Info("Reconnecting now (requested).");
-                        backoff = NormalizeBackoff(_settings.InitialBackoffMs);
-                        continue;
-                    }
+                    if (ct.IsCancellationRequested || Volatile.Read(ref _stopping) == 1)
+                        break;
 
                     if (dropReason == null)
                         continue;
 
-                    var pause = await PauseAfterDropAsync(dropReason, backoff, generation, attempt, ct)
+                    var pause = await PauseAfterDropAsync(dropReason, backoff, attempt, ct)
                         .ConfigureAwait(false);
                     if (!pause.ShouldContinue)
                         break;
@@ -181,68 +224,43 @@ namespace RevitConnector.Transport
                     backoff = pause.BackoffMs;
                 }
             }
+            catch (Exception ex)
+            {
+                if (!(ex is OperationCanceledException))
+                    Logger.Error("Connection loop failed.", ex);
+            }
             finally
             {
-                Interlocked.Exchange(ref _running, 0);
-                Interlocked.Exchange(ref _loopEntered, 0);
-                Publish(ConnectionState.Disconnected, "Stopped.", null, null, attempt);
-                Logger.Info("Connection loop stopped.");
+                Finish(lifetime, attempt);
             }
         }
 
-        /// <summary>
-        /// Drops the current socket and retries immediately, skipping backoff.
-        /// Returns false when the loop is not running.
-        /// </summary>
-        public bool RequestReconnect()
+        private void Finish(CancellationTokenSource lifetime, int attempt)
         {
-            if (Volatile.Read(ref _stopping) == 1 || Volatile.Read(ref _running) != 1)
-                return false;
-
-            var now = Environment.TickCount;
-            if (_lastReconnectTick != int.MinValue &&
-                unchecked(now - _lastReconnectTick) < ReconnectDebounceMs)
-                return true;
-
-            _lastReconnectTick = now;
-            Interlocked.Increment(ref _generation);
-
-            var attempt = CurrentSnapshot?.Attempt ?? 0;
-            Logger.Info("Manual reconnect requested.");
-            Publish(ConnectionState.Connecting, "Reconnect requested.", null, null, attempt);
-
-            try { _attemptCts?.Cancel(); }
-            catch (ObjectDisposedException) { /* attempt already finished */ }
-
-            Abort(GetSocket());
-            return true;
+            Interlocked.Exchange(ref _running, 0);
+            ReleaseLifetime(lifetime);
+            Interlocked.Exchange(ref _loopEntered, 0);
+            Publish(ConnectionState.Disconnected, "Disconnected.", null, null, attempt);
+            Logger.Info("Connection loop stopped.");
         }
-
-        private bool ReconnectRequested(int generation) =>
-            Volatile.Read(ref _generation) != generation;
 
         private async Task<RetryPlan> PauseAfterDropAsync(
             string reason,
             int backoff,
-            int generation,
             int attempt,
             CancellationToken ct)
         {
-            if (ReconnectRequested(generation))
-                return RetryPlan.Again(NormalizeBackoff(_settings.InitialBackoffMs));
-
             var waitMs = Math.Max(backoff, MinBackoffMs);
             Logger.Warn($"WS disconnected: {reason}. Reconnecting in {waitMs} ms.");
             Publish(ConnectionState.Reconnecting, reason, null, waitMs, attempt);
 
-            var wait = await WaitBackoffAsync(waitMs, generation, ct).ConfigureAwait(false);
-            if (wait == WaitResult.Shutdown)
-                return RetryPlan.Stop();
-
-            if (wait == WaitResult.Forced)
+            try
             {
-                Logger.Info("Reconnecting now (requested).");
-                return RetryPlan.Again(NormalizeBackoff(_settings.InitialBackoffMs));
+                await Task.Delay(waitMs, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return RetryPlan.Stop();
             }
 
             return RetryPlan.Again(NextBackoff(waitMs));
@@ -256,34 +274,6 @@ namespace RevitConnector.Transport
         }
 
         private static int NormalizeBackoff(int configured) => Math.Max(configured, MinBackoffMs);
-
-        private enum WaitResult { Elapsed, Forced, Shutdown }
-
-        private async Task<WaitResult> WaitBackoffAsync(int backoffMs, int generation, CancellationToken ct)
-        {
-            var deadline = DateTime.UtcNow.AddMilliseconds(Math.Max(0, backoffMs));
-            while (true)
-            {
-                if (ct.IsCancellationRequested)
-                    return WaitResult.Shutdown;
-
-                if (ReconnectRequested(generation))
-                    return WaitResult.Forced;
-
-                var remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
-                if (remaining <= 0)
-                    return WaitResult.Elapsed;
-
-                try
-                {
-                    await Task.Delay(Math.Min(200, remaining), ct).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return WaitResult.Shutdown;
-                }
-            }
-        }
 
         private readonly struct RetryPlan
         {
@@ -300,24 +290,19 @@ namespace RevitConnector.Transport
             public static RetryPlan Again(int backoffMs) => new RetryPlan(true, backoffMs);
         }
 
-        private async Task ReceiveLoopAsync(
-            ClientWebSocket socket,
-            CancellationToken attemptCt,
-            CancellationToken lifetimeCt)
+        private async Task ReceiveLoopAsync(ClientWebSocket socket, CancellationToken ct)
         {
             var buffer = new byte[8192];
 
-            while (socket.State == WebSocketState.Open
-                   && !attemptCt.IsCancellationRequested
-                   && !lifetimeCt.IsCancellationRequested)
+            while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
             {
-                var message = await ReadMessageAsync(socket, buffer, attemptCt).ConfigureAwait(false);
+                var message = await ReadMessageAsync(socket, buffer, ct).ConfigureAwait(false);
                 if (message == null)
                     break;
 
                 // A long-running command must not stall the receive loop.
                 // Correlation is the JSON-RPC id carried in each message.
-                _ = HandleMessageAsync(message, lifetimeCt);
+                _ = HandleMessageAsync(message, ct);
             }
         }
 
@@ -325,18 +310,58 @@ namespace RevitConnector.Transport
         {
             try
             {
-                var response = await _dispatcher.ProcessAsync(raw, ct).ConfigureAwait(false);
+                DataExchangeResponse response;
+                if (Volatile.Read(ref _listening) == 0)
+                    response = RejectWhileIdle(raw);
+                else
+                    response = await _dispatcher.ProcessAsync(raw, ct).ConfigureAwait(false);
+
                 if (response != null)
                     await SendAsync(response, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
-                /* shutting down or reconnecting */
+                /* shutting down */
             }
             catch (Exception ex)
             {
                 Logger.Error("Failed to handle incoming message.", ex);
             }
+        }
+
+        /// <summary>
+        /// Answers a request without entering the Revit API. Notifications are dropped.
+        /// </summary>
+        private static DataExchangeResponse RejectWhileIdle(string raw)
+        {
+            DataExchangeRequest request;
+            try
+            {
+                request = JsonConvert.DeserializeObject<DataExchangeRequest>(raw);
+            }
+            catch (JsonException ex)
+            {
+                Logger.Warn("Command rejected while idle: invalid JSON. " + ex.Message);
+                return DataExchangeResponse.FromError(null, DataExchangeErrorCodes.ParseError, ex.Message);
+            }
+
+            if (request == null || request.IsNotification)
+                return null;
+
+            Logger.Info("Command ignored; Revit is not listening: " + request.Method);
+            return DataExchangeResponse.FromError(
+                request.Id,
+                DataExchangeErrorCodes.NotListening,
+                "Revit is not listening. Press Connect on the MCP tab.");
+        }
+
+        private void Republish()
+        {
+            var current = CurrentSnapshot;
+            if (current == null)
+                return;
+
+            Publish(current.State, current.Detail, current.ConnectedAtUtc, current.NextRetryMs, current.Attempt);
         }
 
         private void Publish(
@@ -346,20 +371,30 @@ namespace RevitConnector.Transport
             int? nextRetryMs,
             int attempt)
         {
-            var next = new ConnectionSnapshot(
-                state,
-                _settings.ServerUri,
-                detail,
-                connectedAtUtc,
-                nextRetryMs,
-                attempt);
+            ConnectionSnapshot next = null;
+            ConnectionSnapshot previous = null;
+            for (var attemptToPublish = 0; attemptToPublish < 3; attemptToPublish++)
+            {
+                var listening = Volatile.Read(ref _listening) == 1;
+                next = new ConnectionSnapshot(
+                    state,
+                    _settings.ServerUri,
+                    detail,
+                    connectedAtUtc,
+                    nextRetryMs,
+                    attempt,
+                    listening);
+                previous = Interlocked.Exchange(ref _snapshot, next);
+                if ((Volatile.Read(ref _listening) == 1) == listening)
+                    break;
+            }
 
-            var previous = Interlocked.Exchange(ref _snapshot, next);
             if (previous != null
                 && previous.State == next.State
                 && previous.Detail == next.Detail
                 && previous.NextRetryMs == next.NextRetryMs
-                && previous.ConnectedAtUtc == next.ConnectedAtUtc)
+                && previous.ConnectedAtUtc == next.ConnectedAtUtc
+                && previous.Listening == next.Listening)
                 return;
 
             Logger.Info($"MCP connection {next.State}: {next.Detail}");
@@ -370,6 +405,25 @@ namespace RevitConnector.Transport
             catch (Exception ex)
             {
                 Logger.Error("Connection status listener failed.", ex);
+            }
+        }
+
+        private void CancelLifetime()
+        {
+            var cts = Interlocked.CompareExchange(ref _lifetimeCts, null, null);
+            try { cts?.Cancel(); }
+            catch (ObjectDisposedException) { /* loop already finished */ }
+        }
+
+        private void ReleaseLifetime(CancellationTokenSource owned)
+        {
+            if (owned == null)
+                return;
+
+            if (Interlocked.CompareExchange(ref _lifetimeCts, null, owned) == owned)
+            {
+                try { owned.Dispose(); }
+                catch (ObjectDisposedException) { /* already disposed */ }
             }
         }
 
@@ -467,9 +521,8 @@ namespace RevitConnector.Transport
             if (Interlocked.Exchange(ref _stopping, 1) == 1)
                 return;
 
-            try { _attemptCts?.Cancel(); }
-            catch (ObjectDisposedException) { /* attempt already finished */ }
-
+            Interlocked.Exchange(ref _listening, 0);
+            CancelLifetime();
             Abort(GetSocket());
             // The send lock is intentionally not disposed: a response may still be
             // leaving the finally-release while Revit is shutting down.

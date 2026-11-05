@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Concurrent;
-using System.Threading;
-using System.Threading.Tasks;
 using Autodesk.Revit.UI;
 using RevitCommandDispatcher;
 using RevitCommandDispatcher.Commands;
@@ -23,7 +21,6 @@ namespace RevitConnector.Application
         private CommandExecutionHandler _handler;
         private WebSocketClient _client;
         private ConnectionStatusPresenter _statusPresenter;
-        private CancellationTokenSource _cts;
 
         public Result OnStartup(UIControlledApplication application)
         {
@@ -65,13 +62,9 @@ namespace RevitConnector.Application
                     Logger.Error("Failed to create the MCP connection ribbon.", ex);
                 }
 
-                // Visible to Reconnect before the thread-pool task is actually scheduled.
-                _client.MarkRunning();
-                _cts = new CancellationTokenSource();
-                var token = _cts.Token;
-                Task.Run(() => _client.RunAsync(token), token);
-
-                Logger.Info("RevitConnector started.");
+                // The socket may come up on its own. Commands stay out of Revit until Connect.
+                _client.Start();
+                Logger.Info("RevitConnector started. WebSocket connects on its own; Revit is not listening.");
                 return Result.Succeeded;
             }
             catch (Exception ex)
@@ -85,11 +78,9 @@ namespace RevitConnector.Application
         {
             try
             {
-                _cts?.Cancel();
                 _client?.Dispose();
                 _statusPresenter?.Dispose();
                 _externalEvent?.Dispose();
-                _cts?.Dispose();
                 Logger.Info("RevitConnector stopped.");
             }
             catch (Exception ex)
