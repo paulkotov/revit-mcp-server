@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using Autodesk.Revit.UI;
 using RevitConnector.Commands;
+using RevitConnector.Transport;
 using RevitConnector.Utils;
 
 namespace RevitConnector.UI
@@ -46,34 +47,54 @@ namespace RevitConnector.UI
 
             var statusData = new PushButtonData(
                 "McpConnectionStatus",
-                "Connecting",
+                "Offline",
                 assembly,
                 typeof(ShowConnectionStatusCommand).FullName)
             {
                 ToolTip = "MCP bridge status. Click for details.",
                 LongDescription =
-                    "Green: the WebSocket to the local MCP server is open. " +
+                    "The WebSocket connects and retries on its own. " +
+                    "Green: the link is open. The label says Connected until you press Connect, then Listening. " +
                     "Amber: a connection attempt is in progress. " +
-                    "Red: the bridge is offline."
+                    "Red: the bridge is offline. " +
+                    "Revit does not execute MCP commands until you press Connect.",
+                Image = icons?.Small(ConnectionState.Disconnected),
+                LargeImage = icons?.Large(ConnectionState.Disconnected)
             };
 
-            var reconnectData = new PushButtonData(
-                "McpReconnect",
-                "Reconnect",
+            var connectData = new PushButtonData(
+                "McpConnect",
+                "Connect",
                 assembly,
-                typeof(ReconnectCommand).FullName)
+                typeof(ConnectCommand).FullName)
             {
-                ToolTip = "Drop the current socket and connect to the MCP server immediately.",
+                ToolTip = ConnectionStatusText.ConnectTooltip,
                 LongDescription =
-                    "Skips the automatic wait and opens a new WebSocket. " +
-                    "In-flight MCP calls on the old socket will fail and can be retried.",
-                Image = icons?.ReconnectSmall,
-                LargeImage = icons?.ReconnectLarge
+                    "Lets Revit execute commands that arrive on the WebSocket. " +
+                    "The socket itself opens without this button. " +
+                    "Nothing runs in the model until you press Connect.",
+                Image = icons?.ConnectSmall,
+                LargeImage = icons?.ConnectLarge
+            };
+
+            var disconnectData = new PushButtonData(
+                "McpDisconnect",
+                "Disconnect",
+                assembly,
+                typeof(DisconnectCommand).FullName)
+            {
+                ToolTip = ConnectionStatusText.DisconnectTooltip,
+                LongDescription =
+                    "Stops Revit from executing MCP commands. " +
+                    "The WebSocket stays connected and still reconnects on its own.",
+                Image = icons?.DisconnectSmall,
+                LargeImage = icons?.DisconnectLarge
             };
 
             var statusButton = (PushButton)panel.AddItem(statusData);
-            var reconnectButton = (PushButton)panel.AddItem(reconnectData);
-            presenter.Bind(statusButton, reconnectButton, icons);
+            var connectButton = (PushButton)panel.AddItem(connectData);
+            var disconnectButton = (PushButton)panel.AddItem(disconnectData);
+            presenter.Bind(statusButton, connectButton, disconnectButton, icons);
         }
 
         private static RibbonPanel FindPanel(UIControlledApplication application)
