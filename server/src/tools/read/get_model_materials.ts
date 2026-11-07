@@ -2,9 +2,11 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import { withRevitConnection } from "../../utils/ConnectionManager.js";
 
 interface ModelMaterial {
+  category?: string;
   name: string;
   materialClass: string | null;
   volumeM3: number;
@@ -27,6 +29,7 @@ interface ModelMaterials {
     length: "m";
     elevation: "m";
   };
+  byCategory: boolean;
   levels: MaterialsByLevel[];
 }
 
@@ -37,8 +40,13 @@ export function registerGetModelMaterialsTool(server: McpServer) {
       description: [
         "Read material quantities from the active Revit document.",
         "Call this when the user asks which materials are in the model, or for a quantity takeoff, volumes, areas, or rebar lengths.",
-        "It takes no parameters. An open document is required.",
+        "An open document is required.",
+        "Optional parameter byCategory defaults to false.",
+        "Set byCategory to true only when the user explicitly asks to split the takeoff by Revit category as well as by level.",
+        "That includes requests such as \"по категориям\", \"по семействам\", walls, floors, roofs, doors, and similar category names.",
+        "A request for materials, quantities, or levels alone is not such a request. Omit byCategory or pass false. Do not infer it.",
         "The tool sums materials of placed model elements and groups them by level.",
+        "With byCategory true, each level is also split by the element category, such as Стены or Перекрытия.",
         "View-specific elements are skipped. Paint is included as area.",
         "Rebar is reported by bar length, and by volume when Revit provides it, so it is not lost inside the host concrete.",
         'Elements without a level are grouped as "(no level)". Near-zero quantities are omitted.',
@@ -46,13 +54,25 @@ export function registerGetModelMaterialsTool(server: McpServer) {
         "Present the CSV as one markdown table, keeping the row order and the numbers as given.",
         "In the same reply, tell the user they can download the CSV and include the file path from the tool result.",
         "Do not add rows that are not in the CSV, and do not convert the units.",
-        "Columns: projectName, projectPath, level, elevationM, material, materialClass, volumeM3, areaM2, lengthM.",
+        "When byCategory is false, columns are: projectName, projectPath, level, elevationM, material, materialClass, volumeM3, areaM2, lengthM. There is no category column. Do not add one.",
+        "When byCategory is true, the same columns include category between elevationM and material. Elements without a category are \"(no category)\".",
         "elevationM and lengthM are meters, volumeM3 is cubic meters, areaM2 is square meters.",
-        "lengthM is meaningful for rebar. Rows are ordered by level elevation, then by level name, then by material name.",
+        "lengthM is meaningful for rebar. Rows are ordered by level elevation, then by level name, then by category when present, then by material name.",
       ].join(" "),
+      inputSchema: z.object({
+        byCategory: z
+          .boolean()
+          .optional()
+          .describe(
+            "True only when the user explicitly asks to split materials by Revit category (walls, floors, roofs) in addition to levels. Omit or false otherwise.",
+          ),
+      }),
     },
-    async () => {
-      const materials = await withRevitConnection<ModelMaterials>("revit.getModelMaterials");
+    async (input) => {
+      const byCategory = input.byCategory === true;
+      const materials = await withRevitConnection<ModelMaterials>("revit.getModelMaterials", {
+        byCategory,
+      });
       const saved = writeModelMaterialsCsv(materials);
       return {
         content: [
@@ -90,22 +110,40 @@ const CSV_HEADER = [
   "lengthM",
 ];
 
+const CSV_HEADER_BY_CATEGORY = [
+  "projectName",
+  "projectPath",
+  "level",
+  "elevationM",
+  "category",
+  "material",
+  "materialClass",
+  "volumeM3",
+  "areaM2",
+  "lengthM",
+];
+
 export function toModelMaterialsCsv(materials: ModelMaterials): string {
-  const rows: string[][] = [CSV_HEADER];
+  const byCategory = materials.byCategory === true;
+  const rows: string[][] = [byCategory ? CSV_HEADER_BY_CATEGORY : CSV_HEADER];
 
   for (const level of materials.levels ?? []) {
     for (const material of level.materials ?? []) {
-      rows.push([
+      const quantities = [
         materials.projectName ?? "",
         materials.projectPath ?? "",
         level.name ?? "",
         level.elevationM == null ? "" : String(level.elevationM),
+      ];
+      if (byCategory) quantities.push(material.category ?? "");
+      quantities.push(
         material.name ?? "",
         material.materialClass ?? "",
         String(material.volumeM3 ?? 0),
         String(material.areaM2 ?? 0),
         String(material.lengthM ?? 0),
-      ]);
+      );
+      rows.push(quantities);
     }
   }
 
@@ -126,7 +164,8 @@ export function writeModelMaterialsCsv(
   directory = EXPORTS_DIR,
 ): { csv: string; filePath: string; fileName: string; fileUri: string } {
   const csv = toModelMaterialsCsv(materials);
-  const fileName = `model-materials-${fileStamp()}.csv`;
+  const suffix = materials.byCategory === true ? "-by-category" : "";
+  const fileName = `model-materials${suffix}-${fileStamp()}.csv`;
   const filePath = path.join(directory, fileName);
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(filePath, `\uFEFF${csv}`, "utf8");

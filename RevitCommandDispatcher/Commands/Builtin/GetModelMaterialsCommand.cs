@@ -10,6 +10,7 @@ namespace RevitCommandDispatcher.Commands.Builtin
 {
     /// <summary>
     /// Sums every material used by placed elements in the active document, one bucket per level.
+    /// When <c>byCategory</c> is true, each bucket is also split by the element category.
     /// Paint is included. Rebar is measured by bar length so it is not lost inside the host volume.
     /// </summary>
     public sealed class GetModelMaterialsCommand : IRevitCommand
@@ -27,6 +28,7 @@ namespace RevitCommandDispatcher.Commands.Builtin
         public object Execute(UIApplication app, JToken parameters)
         {
             var doc = app.ActiveUIDocument.Document;
+            var byCategory = ReadByCategory(parameters);
             var buckets = new Dictionary<string, Bucket>(StringComparer.Ordinal);
 
             var collector = new FilteredElementCollector(doc)
@@ -38,13 +40,14 @@ namespace RevitCommandDispatcher.Commands.Builtin
                     continue;
 
                 var level = ResolveLevel(doc, element);
+                var category = byCategory ? CategoryName(element) : null;
                 if (element.Category != null && element.Category.Id.IntegerValue == (int)BuiltInCategory.OST_Rebar)
                 {
-                    if (AddRebar(doc, element, level, buckets))
+                    if (AddRebar(doc, element, level, category, buckets))
                         continue;
                 }
 
-                AddMaterialQuantities(doc, element, level, buckets);
+                AddMaterialQuantities(doc, element, level, category, buckets);
             }
 
             var levels = buckets.Values
@@ -53,17 +56,7 @@ namespace RevitCommandDispatcher.Commands.Builtin
                 {
                     name = group.Key,
                     elevationM = group.First().ElevationM,
-                    materials = group
-                        .OrderBy(item => item.Name)
-                        .Select(item => new
-                        {
-                            name = item.Name,
-                            materialClass = item.MaterialClass,
-                            volumeM3 = Round(item.VolumeM3, 3),
-                            areaM2 = Round(item.AreaM2, 3),
-                            lengthM = Round(item.LengthM, 2)
-                        })
-                        .ToArray()
+                    materials = MaterialsOf(group, byCategory)
                 })
                 .OrderBy(level => level.elevationM ?? double.MaxValue)
                 .ThenBy(level => level.name)
@@ -74,14 +67,62 @@ namespace RevitCommandDispatcher.Commands.Builtin
                 projectName = string.IsNullOrWhiteSpace(doc.Title) ? "Untitled" : doc.Title,
                 projectPath = doc.PathName ?? string.Empty,
                 units = new { volume = "m3", area = "m2", length = "m", elevation = "m" },
+                byCategory,
                 levels
             };
+        }
+
+        /// <summary>True only when the caller explicitly asks for a category split.</summary>
+        private static bool ReadByCategory(JToken parameters)
+        {
+            var token = (parameters as JObject)?["byCategory"];
+            return token != null && token.Type == JTokenType.Boolean && token.Value<bool>();
+        }
+
+        private static string CategoryName(Element element)
+        {
+            var name = element?.Category?.Name;
+            return string.IsNullOrWhiteSpace(name) ? "(no category)" : name;
+        }
+
+        private static object[] MaterialsOf(IEnumerable<Bucket> group, bool byCategory)
+        {
+            var ordered = byCategory
+                ? group.OrderBy(item => item.CategoryName).ThenBy(item => item.Name)
+                : group.OrderBy(item => item.Name);
+
+            if (!byCategory)
+            {
+                return ordered
+                    .Select(item => (object)new
+                    {
+                        name = item.Name,
+                        materialClass = item.MaterialClass,
+                        volumeM3 = Round(item.VolumeM3, 3),
+                        areaM2 = Round(item.AreaM2, 3),
+                        lengthM = Round(item.LengthM, 2)
+                    })
+                    .ToArray();
+            }
+
+            return ordered
+                .Select(item => (object)new
+                {
+                    category = item.CategoryName,
+                    name = item.Name,
+                    materialClass = item.MaterialClass,
+                    volumeM3 = Round(item.VolumeM3, 3),
+                    areaM2 = Round(item.AreaM2, 3),
+                    lengthM = Round(item.LengthM, 2)
+                })
+                .ToArray();
         }
 
         private static void AddMaterialQuantities(
             Document doc,
             Element element,
             Level level,
+            string category,
             Dictionary<string, Bucket> buckets)
         {
             var bodyIds = MaterialIds(element, paint: false);
@@ -133,7 +174,7 @@ namespace RevitCommandDispatcher.Commands.Builtin
                 if (volume < VolumeEpsilon && area < AreaEpsilon)
                     continue;
 
-                var bucket = GetBucket(buckets, level, material.Id.IntegerValue.ToString(), material.Name, material.MaterialClass);
+                var bucket = GetBucket(buckets, level, category, material.Id.IntegerValue.ToString(), material.Name, material.MaterialClass);
                 bucket.VolumeM3 += volume;
                 bucket.AreaM2 += area;
             }
@@ -168,6 +209,7 @@ namespace RevitCommandDispatcher.Commands.Builtin
             Document doc,
             Element element,
             Level level,
+            string category,
             Dictionary<string, Bucket> buckets)
         {
             var rebar = element as Rebar;
@@ -184,7 +226,7 @@ namespace RevitCommandDispatcher.Commands.Builtin
                 ? barType.Name
                 : element.Name;
 
-            var bucket = GetBucket(buckets, level, "rebar:" + name, name, "Rebar");
+            var bucket = GetBucket(buckets, level, category, "rebar:" + name, name, "Rebar");
             bucket.LengthM += length;
             try
             {
@@ -217,18 +259,22 @@ namespace RevitCommandDispatcher.Commands.Builtin
         private static Bucket GetBucket(
             Dictionary<string, Bucket> buckets,
             Level level,
+            string category,
             string materialKey,
             string name,
             string materialClass)
         {
             var levelName = level != null ? level.Name : "(no level)";
-            var key = levelName + "\u001f" + materialKey;
+            var key = category == null
+                ? levelName + "\u001f" + materialKey
+                : levelName + "\u001f" + category + "\u001f" + materialKey;
             if (!buckets.TryGetValue(key, out var bucket))
             {
                 bucket = new Bucket
                 {
                     LevelName = levelName,
                     ElevationM = level == null ? (double?)null : Round(RevitUnits.ToMeters(level.Elevation), 3),
+                    CategoryName = category,
                     Name = name ?? string.Empty,
                     MaterialClass = string.IsNullOrWhiteSpace(materialClass) ? null : materialClass
                 };
@@ -286,6 +332,7 @@ namespace RevitCommandDispatcher.Commands.Builtin
         {
             public string LevelName;
             public double? ElevationM;
+            public string CategoryName;
             public string Name;
             public string MaterialClass;
             public double VolumeM3;
