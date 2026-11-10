@@ -15,6 +15,6 @@ export function registerSayHelloTool(server: McpServer) {
       return {
         content: [{ type: "text", text: `Hello, ${input.name}!` }],
       };
-    }
+    },
   );
 }

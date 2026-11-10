@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { toModelMaterialsCsv, writeModelMaterialsCsv } from "../build/tools/read/get_model_materials.js";
+import {
+  toModelMaterialsCsv,
+  writeModelMaterialsCsv,
+} from "../build/tools/read/get_model_materials.js";
 
 test("material quantities become one CSV table", () => {
   const csv = toModelMaterialsCsv({
@@ -46,7 +49,7 @@ test("material quantities become one CSV table", () => {
       "projectName,projectPath,level,elevationM,material,materialClass,volumeM3,areaM2,lengthM",
       '"House, A",C:\\Models\\house.rvt,Level 1,0,"Concrete ""B25""",Concrete,12.5,40,0',
       '"House, A",C:\\Models\\house.rvt,(no level),,A500,,0.1,0,18.25',
-    ].join("\n")
+    ].join("\n"),
   );
 });
 
@@ -60,7 +63,7 @@ test("material quantities are written as a downloadable CSV file", () => {
         units: { volume: "m3", area: "m2", length: "m", elevation: "m" },
         levels: [],
       },
-      directory
+      directory,
     );
 
     assert.match(saved.fileName, /^model-materials-\d{8}-\d{6}\.csv$/);
